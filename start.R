@@ -12,10 +12,13 @@
 #'date: \ 16-04-2018\
 #'---
 
+
+# https://www.digitalocean.com/community/tutorials/how-to-install-java-with-apt-get-on-ubuntu-16-04
+
 #+ ---------------------------------
 #' ## Script preparation
 #' 
-#+ preparation, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
+#+ preparation, echo=FALSE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
 
 # Avoid interference with old variables by cleaning the Global Environment
 rm(list=ls(all=TRUE))
@@ -34,10 +37,11 @@ p_loaded()
 
 # Dynamic Sourcing of all the required functions
 source(paste0("../../pokyah/R-utilities/R-utilities.R"))
-source(paste0("../agrometeor-global-utilities/source_files_recursively.fun.R"))
-source_files_recursively.fun("./functions")
-source_files_recursively.fun("../agrometeor-public")
+source_files_recursively.fun("./R")
+source_files_recursively.fun("../agrometeor-public/R/")
 
+# Loading the data
+load(paste0(wd.chr,"/.RData"))
 
 #+ ---------------------------------
 #' ## Data acquisition
@@ -51,8 +55,8 @@ tsa_last_year.df <- prepare_agromet_API_data.fun(
     table_name.chr = "cleandata",
     stations_ids.chr = "all",
     sensors.chr = "tsa",
-    dfrom.chr = as.character(Sys.Date()-365),
-    dto.chr = as.character(Sys.Date())
+    dfrom.chr = as.character(Sys.Date()-60),
+    dto.chr = as.character(Sys.Date()-55)
   )
 )
 
@@ -67,90 +71,83 @@ tsa_last_year.df <- tsa_last_year.df %>%
 # selecting features
 tsa.model.df <- tsa_last_year.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
 
+# renaming the columns to same names as prediction grid
+#colnames(tsa.model.df) <- c("X", "Y", "ele", "tsa")
+
+# converting to sf
+tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
+                        coords = c("longitude", "latitude"),
+                        crs = 4326)
+
 #' ### Independent variable
 
 # Get the topo rasters stack
 topo.ras.stack <- build_topo_rasters.fun()
 
 # Create the 10km² resolution virtual stations network
-vn_10.grid.sf <- build_wal_grid.fun(res.num=10,geom.chr = "centers")
+vn_10.grid.sfc <- build_wal_grid.fun(res.num=10,geom.chr = "centers")
+vn_10.grid.sf <- st_sf(geom=vn_10.grid.sfc)
 
-# "Core" the stack at the locations of the virtual stations
-topo.extract.mat <- raster::extract(topo.ras.stack, st_coordinates(virtual_network_10.grid.sf))
-vn_10.grid.sf$ele <- data.frame(topo.extract.mat[,1])
-vn_10.grid.sf$slo <- data.frame(topo.extract.mat[,2])
-vn_10.grid.sf$asp <- data.frame(topo.extract.mat[,3])
+# Create the 1km² resolution virtual stations network
+vn_1.grid.sfc <- build_wal_grid.fun(res.num=1,geom.chr = "centers")
+vn_1.grid.sf <- st_sf(geom=vn_1.grid.sfc)
 
-# check we have what we need - https://gis.stackexchange.com/questions/224915/extracting-data-frame-from-simple-features-object-in-r
-head(data.frame(vn_10.grid.sf))
+# "Core" the topo rasters stack at the locations of the 10 km² virtual stations
+topo.num <- raster::extract(topo.ras.stack, vn_10.grid.sf, weights=FALSE, fun=max)
+vn_10_data.grid.sf <- st_sf(altitude=topo.num[,1], slo=topo.num[,2], asp=topo.num[,3], geom=vn_10.grid.sfc)
 
-library(sp)
-data(meuse)
-coordinates(meuse) = ~x+y
-m.sf = st_as_sf(meuse)
-opar = par(mar=rep(0,4))
-plot(m.sf)
-
-st_coordinates(vn_10.grid.sf)
+# "Core" the topo rasters stack at the locations of the 1 km² virtual stations
+topo.num <- raster::extract(topo.ras.stack, vn_1.grid.sf, weights=FALSE, fun=max)
+vn_1_data.grid.sf <- st_sf(ele=topo.num[,1], slo=topo.num[,2], asp=topo.num[,3], geom=vn_1.grid.sfc)
 
 
-# load the mlr lib
-library(mlr)
+# Reconsrtruct a normal 10 km² df to submit as prediction grid to mlr library
+vn_10_data.grid.sf <- vn_10_data.grid.sf %>% filter(!is.na(ele)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
+coor.vn_10_data.grid.df <- data.frame(st_coordinates(x = vn_10_data.grid.sf))
+topo.vn_10_data.grid.df <- (as.data.frame(vn_10_data.grid.sf))[-length(vn_10_data.grid.sf)]
+vn_10_data.grid.df <- dplyr::bind_cols(coor.vn_10_data.grid.df, topo.vn_10_data.grid.df)
 
-# creating the regression task
-regr.task = mlr::makeRegrTask(
-  id = "tsa.1year.pos.regr",
-  data = tsa.model.df,
-  target = "tsa"
-)
+# Reconsrtruct a normal 1 km² df to submit as prediction grid to mlr library
+vn_1_data.grid.sf <- vn_1_data.grid.sf %>% filter(!is.na(ele)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
+coor.vn_1_data.grid.df <- data.frame(st_coordinates(x = vn_1_data.grid.sf))
+topo.vn_1_data.grid.df <- (as.data.frame(vn_1_data.grid.sf))[-length(vn_1_data.grid.sf)]
+vn_1_data.grid.df <- dplyr::bind_cols(coor.vn_1_data.grid.df, topo.vn_1_data.grid.df)
+colnames(vn_1_data.grid.df)[1:3] <- c("longitude", "latitude", "altitude")
 
-# Get some information about the task
-getTaskDesc(regr.task)
+#+ ---------------------------------
+#' ## Spatialization
+#' 
+#+ spatialization, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
 
-# create the response learner
-resp.regr.lrn = mlr::makeLearner(
-  cl = "regr.lm",
-  id = "tsa.1year.pos.regr",
-  predict.type = "response" #could also be "se"
-)
+# One model for each hour
+by_mtime <- tsa_last_year.df %>%
+  group_by(mtime) %>%
+  do(spatialize(
+    records.df = .,
+    task.id.chr = "t",
+    learner.id.chr = "l",
+    learner.cl.chr = "regr.lm",
+    target.chr = "tsa",
+    prediction_grid.df = vn_1_data.grid.df
+  ))
 
-# train the resp learner to create the regr model on our dataset
-resp.regr.mod = train(resp.regr.lrn, regr.task)
-
-# Get infos about the model
-resp.regr.mod$learner
-print(resp.regr.mod$learner.model)
-print(summary(resp.regr.mod$learner.model))
-print(resp.regr.mod$features)
-print(resp.regr.mod$task.desc$size)
-
-# Compute the model prediction for tsa_diff using ensPameseb and vvtPameseb for each hourly records
-resp.task.pred = predict(
-  object = resp.regr.mod,
-  task = regr.task
-)
-
-# Inspect the difference between the true, predicted and SE values
-print(signif(head(getPredictionTruth(resp.task.pred)),2))
-print(head(getPredictionResponse(resp.task.pred)))
+# 
+se <- spatialize(
+    records.df = tsa_last_year.df,
+    task.id.chr = "t",
+    learner.id.chr = "l",
+    learner.cl.chr = "regr.lm",
+    target.chr = "tsa",
+    prediction_grid.df = vn_1_data.grid.df
+  )
+  
 
 
-# Visualising the prediction of tsa_diff according to ens and vvt
-resp.pred.plot <- plotLearnerPrediction(resp.regr.lrn, task = regr.task)
-resp.pred.plot
+# http://stat545.com/block023_dplyr-do.html
+# https://gis.stackexchange.com/questions/224915/extracting-data-frame-from-simple-features-object-in-r
+# http://mlr-org.github.io/mlr/articles/tutorial/devel/handling_of_spatial_data.html
+# http://www.bisolutions.us/A-Brief-Introduction-to-Spatial-Interpolation.php
 
-# Visualising the prediction of tsa_diff according to ens only
-ens.resp.pred.plot <- plotLearnerPrediction(resp.regr.lrn, features= "altitude", task = regr.task)
-ens.resp.pred.plot
-
-# Visualising the prediction of tsa_diff according to vvt only
-vvt.resp.pred.plot <- plotLearnerPrediction(resp.regr.lrn, features= "longitude", task = regr.task)
-vvt.resp.pred.plot
-
-graph_reso <- 0.5
-axis_x <- seq(min(records.reshaped.df$ens_61), max(records.reshaped.df$ens_61), by = graph_reso)
-axis_y <- seq(min(records.reshaped.df$vvt_61), max(records.reshaped.df$vvt_61), by = graph_reso)
-tsadiff_lm_surface <- expand.grid(ens_61 = axis_x, vvt_61 = axis_y,KEEP.OUT.ATTRS = F)
 
 
 #+ ---------------------------------
