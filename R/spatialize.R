@@ -37,14 +37,14 @@ spatialize <- function(records.df, task.id.chr, learner.id.chr, learner.cl.chr, 
   getTaskDesc(regr.task)
   
   # create the response learner
-  # resp.regr.lrn = mlr::makeLearner(
-  #   cl = learner.cl.chr ,
-  #   id = learner.id.chr,
-  #   predict.type = "response" #could also be "se"
-  # )
-  # 
-  # train the resp learner to create the regr model on our dataset
-  # resp.regr.mod = train(resp.regr.lrn, regr.task)
+  resp.regr.lrn = mlr::makeLearner(
+    cl = learner.cl.chr ,
+    id = learner.id.chr,
+    predict.type = "response" #could also be "se"
+  )
+
+  #train the resp learner to create the regr model on our dataset
+  resp.regr.mod = train(resp.regr.lrn, regr.task)
   
   # create the standard error learner
   se.regr.lrn = mlr::makeLearner(
@@ -70,26 +70,25 @@ spatialize <- function(records.df, task.id.chr, learner.id.chr, learner.cl.chr, 
   # )
   
   # Compute the model SE for the target on the grid
-  se.task.pred = predict(
-    object = se.regr.mod,
+  resp.task.pred = predict(
+    object = resp.regr.mod,
     newdata = prediction_grid.df
   )
 
   # Group in a spatial sf
   #pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(resp.task.pred), as.data.frame(se.task.pred))
-  pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(se.task.pred))
-  pred_data.grid.sf <- tsa.model.sf <- st_as_sf(x = pred_data.grid.df, 
-                                                coords = c("longitude", "latitude"),
-                                                crs = 4326)
-  
-  plot <- plot(pred_data.grid.sf)
-  
-  # Inspect the difference between the true, predicted and SE values
-  print(head(getPredictionResponse(resp.task.pred)))
-  
+  pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(resp.task.pred))
+  # pred_data.grid.sf <- tsa.model.sf <- st_as_sf(x = pred_data.grid.df, 
+  #                                               coords = c("longitude", "latitude"),
+  #                                               crs = 4326)
+  # 
+  # plot <- plot(pred_data.grid.sf)
+  # 
+  # # Inspect the difference between the true, predicted and SE values
+  # print(head(getPredictionResponse(resp.task.pred)))
+  # 
   # Return the predicted data and the error
-  return(plot)
-  
+  return(pred_data.grid.df)
 }
 
 #+ ---------------------------------

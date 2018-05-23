@@ -41,43 +41,12 @@ source_files_recursively.fun("./R")
 source_files_recursively.fun("../agrometeor-public/R/")
 
 # Loading the data
-load(paste0(wd.chr,"/.RData"))
+load(paste0(wd.chr,"/data-output/apicall.RData"))
 
 #+ ---------------------------------
 #' ## Data acquisition
 #' 
 #+ data-acquisition, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
-
-#' ### Dependent variables
-tsa_last_year.df <- prepare_agromet_API_data.fun(
-  get_from_agromet_API.fun(
-    user_token.chr = Sys.getenv("AGROMET_API_V1_KEY"),
-    table_name.chr = "cleandata",
-    stations_ids.chr = "all",
-    sensors.chr = "tsa",
-    dfrom.chr = as.character(Sys.Date()-60),
-    dto.chr = as.character(Sys.Date()-55)
-  )
-)
-
-# Filtering records
-tsa_last_year.df <- tsa_last_year.df %>%
-  filter(network_name == "pameseb") %>%
-  filter(type_name != "Sencrop") %>%
-  filter(!is.na(to)) %>%
-  filter(state == "Ok") %>%
-  filter(!is.na(tsa))
-
-# selecting features
-tsa.model.df <- tsa_last_year.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
-
-# renaming the columns to same names as prediction grid
-#colnames(tsa.model.df) <- c("X", "Y", "ele", "tsa")
-
-# converting to sf
-tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
-                        coords = c("longitude", "latitude"),
-                        crs = 4326)
 
 #' ### Independent variable
 
@@ -98,35 +67,83 @@ vn_10_data.grid.sf <- st_sf(altitude=topo.num[,1], slo=topo.num[,2], asp=topo.nu
 
 # "Core" the topo rasters stack at the locations of the 1 km² virtual stations
 topo.num <- raster::extract(topo.ras.stack, vn_1.grid.sf, weights=FALSE, fun=max)
-vn_1_data.grid.sf <- st_sf(ele=topo.num[,1], slo=topo.num[,2], asp=topo.num[,3], geom=vn_1.grid.sfc)
-
+vn_1_data.grid.sf <- st_sf(altitude=topo.num[,1], slo=topo.num[,2], asp=topo.num[,3], geom=vn_1.grid.sfc)
 
 # Reconsrtruct a normal 10 km² df to submit as prediction grid to mlr library
-vn_10_data.grid.sf <- vn_10_data.grid.sf %>% filter(!is.na(ele)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
+vn_10_data.grid.sf <- vn_10_data.grid.sf %>% filter(!is.na(altitude)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
 coor.vn_10_data.grid.df <- data.frame(st_coordinates(x = vn_10_data.grid.sf))
 topo.vn_10_data.grid.df <- (as.data.frame(vn_10_data.grid.sf))[-length(vn_10_data.grid.sf)]
 vn_10_data.grid.df <- dplyr::bind_cols(coor.vn_10_data.grid.df, topo.vn_10_data.grid.df)
 
 # Reconsrtruct a normal 1 km² df to submit as prediction grid to mlr library
-vn_1_data.grid.sf <- vn_1_data.grid.sf %>% filter(!is.na(ele)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
+vn_1_data.grid.sf <- vn_1_data.grid.sf %>% filter(!is.na(altitude)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
 coor.vn_1_data.grid.df <- data.frame(st_coordinates(x = vn_1_data.grid.sf))
 topo.vn_1_data.grid.df <- (as.data.frame(vn_1_data.grid.sf))[-length(vn_1_data.grid.sf)]
 vn_1_data.grid.df <- dplyr::bind_cols(coor.vn_1_data.grid.df, topo.vn_1_data.grid.df)
 colnames(vn_1_data.grid.df)[1:3] <- c("longitude", "latitude", "altitude")
+
+#' ### Dependent variables
+tsa_last_year.df <- prepare_agromet_API_data.fun(
+  get_from_agromet_API.fun(
+    user_token.chr = Sys.getenv("AGROMET_API_V1_KEY"),
+    table_name.chr = "cleandata",
+    stations_ids.chr = "all",
+    sensors.chr = "tsa",
+    dfrom.chr = as.character(Sys.Date()-60),
+    dto.chr = as.character(Sys.Date()-55)
+  )
+)
+
+# Filtering records to keep only the useful ones
+tsa_last_year.df <- tsa_last_year.df %>%
+  filter(network_name == "pameseb") %>%
+  filter(type_name != "Sencrop") %>%
+  filter(!is.na(to)) %>%
+  filter(state == "Ok") %>%
+  filter(!is.na(tsa))
+
+# selecting features useful for modelization
+tsa.model.df <- tsa_last_year.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
+
+# converting to sf
+tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
+                        coords = c("longitude", "latitude"),
+                        crs = 4326)
 
 #+ ---------------------------------
 #' ## Spatialization
 #' 
 #+ spatialization, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
 
+make_sf <- function(row){
+  st_as_sf(
+    x = row, 
+    coords = c("longitude", "latitude"),
+    crs = 4326)
+}
+
 # One model for each hour
-by_mtime <- tsa_last_year.df %>%
+mod.by_mtime <- tsa_last_year.df %>%
   group_by(mtime) %>%
   do(spatialize(
     records.df = .,
     task.id.chr = "t",
     learner.id.chr = "l",
     learner.cl.chr = "regr.lm",
+    target.chr = "tsa",
+    prediction_grid.df = vn_1_data.grid.df
+  ))
+ 
+ mod.by_mtime.sf <-mod.by_mtime %>%
+  do(make_sf(
+    row =.
+  ))
+
+bmr.by_mtime <- tsa_last_year.df %>%
+  group_by(mtime) %>%
+  do(lrns.benchmark(
+    records.df = .,
+    task.id.chr = "t",
     target.chr = "tsa",
     prediction_grid.df = vn_1_data.grid.df
   ))
