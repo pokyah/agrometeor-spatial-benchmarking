@@ -20,7 +20,7 @@
 #'---
 
 
-spatialize <- function(records.df, target.chr, prediction_grid.df){
+lrnrs.benchmark <- function(records.df, target.chr, prediction_grid.df, ){
   
   require(mlr)
   

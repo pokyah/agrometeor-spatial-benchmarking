@@ -64,10 +64,10 @@ spatialize <- function(records.df, task.id.chr, learner.id.chr, learner.cl.chr, 
   # print(resp.regr.mod$task.desc$size)
   
   # Compute the model response for the target on the grid
-  # resp.task.pred = predict(
-  #   object = resp.regr.mod,
-  #   newdata = prediction_grid.df
-  # )
+  resp.task.pred = predict(
+    object = resp.regr.mod,
+    newdata = prediction_grid.df
+  )
   
   # Compute the model SE for the target on the grid
   resp.task.pred = predict(

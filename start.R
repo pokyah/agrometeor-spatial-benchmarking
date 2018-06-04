@@ -38,7 +38,7 @@ p_loaded()
 # Dynamic Sourcing of all the required functions
 source(paste0("../../pokyah/R-utilities/R-utilities.R"))
 source_files_recursively.fun("./R")
-source_files_recursively.fun("../agrometeor-public/R/")
+source_files_recursively.fun("../agrometeor_utilities_public/R/")
 
 # Loading the data
 load(paste0(wd.chr,"/data-output/apicall.RData"))
@@ -122,11 +122,20 @@ make_sf <- function(row){
     crs = 4326)
 }
 
-# One model for each hour
+#https://stackoverflow.com/questions/35558766/purrr-map-a-t-test-onto-a-split-df
+#http://stat545.com/block024_group-nest-split-map.html
+#https://purrr.tidyverse.org/reference/map.html
+#https://stackoverflow.com/questions/47415072/pass-multiple-functions-to-purrrmap
+#https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function#42518473
+#https://stackoverflow.com/questions/49724457/how-to-pass-second-parameter-to-function-while-using-the-map-function-of-purrr-p
+#https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r
+
+#One model for each hour
+
 mod.by_mtime <- tsa_last_year.df %>%
   group_by(mtime) %>%
-  do(spatialize(
-    records.df = .,
+  by_row(spatialize(
+    records.df  = .,
     task.id.chr = "t",
     learner.id.chr = "l",
     learner.cl.chr = "regr.lm",
