@@ -33,9 +33,7 @@ benchmark.hourly_sets <- function(nested.records.df, target.chr){
     #predict = "test"
   )
   
-  # defining the list of learners to benchmark
-  learners.l <- list("regr.lm", "regr.elmNN", "regr.kknn", "regr.km")
-  
+
   # converting each tibble of the nested records to a strict dataframe
   # ::todo:: need to use transmute_at
   nested.records.df <- nested.records.df %>%
@@ -44,88 +42,82 @@ benchmark.hourly_sets <- function(nested.records.df, target.chr){
       .f = data.frame
       ))
   
-  # defining the regression tasks for eache of the hourly datasets
+  # defining the regression tasks for each of the hourly datasets
+  # https://stackoverflow.com/questions/46868706/failed-to-use-map2-with-mutate-with-purrr-and-dplyr
+  #https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function?rq=1
   nested.records.df <- nested.records.df %>%
-    mutate(task = purrr::map(
-      .x = data_as_df,
-      .f = mlr::makeRegrTask,
-      id = "test",
-      target = target.chr))
-  
+    mutate(task = purrr::map2(
+      as.character(mtime),
+      data_as_df,
+      mlr::makeRegrTask,
+      target = target.chr
+    )
+    )
+
   # keeping only the useful features (vars)
-  u.nested.records.df <- nested.records.df %>%
-    mutate(data_u = purrr::map(
-      .x = data,
-      .f = dplyr::select_(
-        one_of(c("longitude", "latitude", "altitude", "tsa"))
-        )
-      ))
+  # u.nested.records.df <- nested.records.df %>%
+  #   mutate(data_u = purrr::map(
+  #     .x = data,
+  #     .f = dplyr::select_(
+  #       one_of(c("longitude", "latitude", "altitude", "tsa"))
+  #       )
+  #     ))
   
   # defining the list of tasks from the nested records
-  tasks.l <- nested.records.df$data_as_df
-  
-  
-  
-  # map(learners, makeLearner)
-  
-  # making short the df is not a tible but a strict df
-  # records.df <- data.frame(records.df)
+  tasks.l <- nested.records.df$task
   
   # defining the learners who will be compared
   lrns.l <- list(
-    makeLearner(cl = "regr.lm", id="linear regression"),
-    makeLearner(cl = "regr.elmNN", id="single layer neural net"),
-    makeLearner(cl ="regr.kknn", id="nearest neighbours"),
+    makeFilterWrapper(
+      learner = makeLearner(cl = "regr.lm", id="linear regression"),  fw.method = "information.gain", fw.abs = 2),
+    # makeLearner(cl = "regr.lm", id="linear regression"),
+    # makeLearner(cl = "regr.elmNN", id="single layer neural net"),
+    # makeLearner(cl ="regr.kknn", id="nearest neighbours"),
     makeLearner(cl = "regr.km", id="kriging")
   )
   
-  # defining the spatialization task (dataset + target var)
-  spatialization.task = mlr::makeRegrTask(
-    id = "spatialization",
-    data = meuse.df,
-    target = "zinc",
-    coordinates = meuse.df[c("x", "y")]
-  )
+  bmr.l <- benchmark(learners = lrns.l, tasks = tasks.l, resamplings = resampling.l, keep.pred = TRUE, show.info = TRUE)
   
-
+  return(bmr.l)
   
-  # conducting the benchmark experiment
-  benchmark.l <- benchmark(learners = lrns.l, tasks = spatialization.task, resamplings = valid.l)
-  
-  # getting the predictions from the model
-  stations.pred.l <- getBMRPredictions(benchmark.l)
-  
-  # predicting on the grid 
-  meuse.grid.pred <- predict(
-    train(lrns.l[[1]], spatialization.task),
-    newdata = meuse.grid.df
-  )
-  
-  meuse.grid.pred.data <- dplyr::bind_cols(meuse.grid.df, meuse.grid.pred$data )
-  coordinates(meuse.grid.pred.data) <- ~x+y
-  class(meuse.grid.pred.data)
-  
-  spplot(meuse.grid.pred.data)
+  # https://mlr-org.github.io/mlr/articles/tutorial/devel/nested_resampling.html
+  # https://mlr-org.github.io/mlr/articles/tutorial/devel/feature_selection.html
   
   
-  
-  spplot(meuse$zinc)
-  
-  
-  # Group in a spatial sf
-  #pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(resp.task.pred), as.data.frame(se.task.pred))
-  pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(se.task.pred))
-  pred_data.grid.sf <- tsa.model.sf <- st_as_sf(x = pred_data.grid.df, 
-                                                coords = c("longitude", "latitude"),
-                                                crs = 4326)
-  
-  plot <- plot(pred_data.grid.sf)
-  
-  # Inspect the difference between the true, predicted and SE values
-  print(head(getPredictionResponse(resp.task.pred)))
-  
-  # Return the predicted data and the error
-  return(plot)
+ # # getting the predictions from the model
+ #  stations.pred.l <- getBMRPredictions(benchmark.l)
+ #  
+ #  # predicting on the grid 
+ #  meuse.grid.pred <- predict(
+ #    train(lrns.l[[1]], spatialization.task),
+ #    newdata = meuse.grid.df
+ #  )
+ #  
+ #  meuse.grid.pred.data <- dplyr::bind_cols(meuse.grid.df, meuse.grid.pred$data )
+ #  coordinates(meuse.grid.pred.data) <- ~x+y
+ #  class(meuse.grid.pred.data)
+ #  
+ #  spplot(meuse.grid.pred.data)
+ #  
+ #  
+ #  
+ #  spplot(meuse$zinc)
+ #  
+ #  
+ #  # Group in a spatial sf
+ #  #pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(resp.task.pred), as.data.frame(se.task.pred))
+ #  pred_data.grid.df <- dplyr::bind_cols(prediction_grid.df, as.data.frame(se.task.pred))
+ #  pred_data.grid.sf <- tsa.model.sf <- st_as_sf(x = pred_data.grid.df, 
+ #                                                coords = c("longitude", "latitude"),
+ #                                                crs = 4326)
+ #  
+ #  plot <- plot(pred_data.grid.sf)
+ #  
+ #  # Inspect the difference between the true, predicted and SE values
+ #  print(head(getPredictionResponse(resp.task.pred)))
+ #  
+ #  # Return the predicted data and the error
+ #  return(plot)
   
 }
 

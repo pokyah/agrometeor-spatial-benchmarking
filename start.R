@@ -51,20 +51,20 @@ source_files_recursively.fun("../agrometeor_utilities_public/R/")
 #' ### Dependent variables
 
 # Retrieving from API
-tsa_5days.records.df <- prepare_agromet_API_data.fun(
+tsa.records.df <- prepare_agromet_API_data.fun(
   get_from_agromet_API.fun(
     user_token.chr = Sys.getenv("AGROMET_API_V1_KEY"),
     table_name.chr = "cleandata",
     stations_ids.chr = "all",
     sensors.chr = "tsa",
     dfrom.chr = as.character(Sys.Date()-60),
-    dto.chr = as.character(Sys.Date()-55),
+    dto.chr = as.character(Sys.Date()-59),
     api_v.chr = "v2"
   )
 )
 
 # Filtering records to keep only the useful ones
-tsa_5days.records.df <- tsa_5days.records.df %>%
+tsa.records.df <- tsa.records.df %>%
   filter(network_name == "pameseb") %>%
   filter(type_name != "Sencrop") %>%
   filter(!is.na(to)) %>%
@@ -72,7 +72,7 @@ tsa_5days.records.df <- tsa_5days.records.df %>%
   filter(!is.na(tsa))
 
 # Selecting only the useful features
-tsa_5days.records.df <- tsa_5days.records.df %>%
+tsa.records.df <- tsa.records.df %>%
   dplyr::select(one_of(c("mtime", "longitude", "latitude", "altitude", "tsa")))
 
 #' ### Independent variables
@@ -85,8 +85,8 @@ topo.df <- data.frame(
   raster::extract(
     projectRaster(
       build_topo_rasters.fun(),
-      crs=crs(grid)),
-    grid,
+      crs=crs(grid.sp)),
+    grid.sp,
     weights=TRUE,
     fun=max
     ))
@@ -101,8 +101,8 @@ colnames(explanatory.df) <- c("longitude", "latitude", "altitude", "pente", "ori
 #+ one_h_spatial_pred, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
 
 # predicting one hour
-spatialized.df <- tsa_5days.records.df %>%
-  filter(mtime == tsa_5days.records.df$mtime[13] ) %>%
+spatialized.df <- tsa.records.df %>%
+  filter(mtime == tsa.records.df$mtime[13] ) %>%
   spatialize(
     records.df  = .,
     task.id.chr = "t",
@@ -117,7 +117,7 @@ spatialized.df <- tsa_5days.records.df %>%
 #https://stackoverflow.com/questions/29736577/how-to-convert-data-frame-to-spatial-coordinates#29736844
 gridded <- spatialized.df
 coordinates(gridded) <- c("longitude", "latitude")
-crs(gridded) <- crs(wallonie.sp)
+crs(gridded) <- crs(grid.sp)
 
 gridded.3812.sp <- spTransform(gridded, CRS(projargs = dplyr::filter(rgdal::make_EPSG(), code == "3812")$prj4))
 gridded.3812.sp  <- as(gridded.3812.sp , "SpatialPixelsDataFrame")
@@ -127,6 +127,17 @@ gridded.3812.sp <- as(gridded.3812.sp, "SpatialGridDataFrame")
 #' ## mapping the predicted grid using tmap
 #' 
 #+ mapping, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
+
+be.sp <- getData('GADM', country = 'BE', level = 1, download = TRUE)
+be.sp$NAME_1
+wallonie.sp <- be.sp[be.sp$NAME_1 == "Wallonie",]
+
+# check the CRS to know which map units are used  
+proj4string(wallonie.sp)
+
+# set CRS to "lambert 2008" which EPSG is 3812
+wallonie.3812.sp <- spTransform(wallonie.sp, CRS(projargs = dplyr::filter(rgdal::make_EPSG(), code == "3812")$prj4))
+
 
 library(tmap)
 tm_shape(gridded.3812.sp, projection="3812") +
@@ -155,15 +166,15 @@ tm_shape(gridded.3812.sp, projection="3812") +
 
 # Building a nested data frame, where for each hourly observation we have a 30 stations dataset of 1h temperature record.
 library(purrr)
-tsa_5days.nested.df <- tsa_5days.records.df %>%
+tsa.nested.df <- tsa.records.df %>%
   group_by(mtime) %>%
   nest()
 
 # Passing to benchmarking function
-tsa_5days.bmr.l <- benchmark.hourly_sets(tsa_5days.nested.df)
+tsa.bmr.l <- benchmark.hourly_sets(tsa.nested.df)
 
 # selecting features useful for modelization
-tsa.model.df <- tsa_5days.records.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
+tsa.model.df <- tsa.records.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
 
 # converting to sf
 tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
@@ -194,7 +205,7 @@ make_sf <- function(row){
 
 
 #One model for each hour
-mod.by_mtime <- tsa_5days.records.df %>%
+mod.by_mtime <- tsa.records.df %>%
   group_by(mtime) %>%
   by_row(spatialize(
     records.df  = .,
@@ -213,7 +224,7 @@ mod.by_mtime.sf <-mod.by_mtime %>%
     row =.
   ))
 
-bmr.by_mtime <- tsa_5days.records.df %>%
+bmr.by_mtime <- tsa.records.df %>%
   group_by(mtime) %>%
   do(lrns.benchmark(
     records.df = .,
@@ -224,7 +235,7 @@ bmr.by_mtime <- tsa_5days.records.df %>%
 
 # 
 se <- spatialize(
-  records.df = tsa_5days.records.df,
+  records.df = tsa.records.df,
   task.id.chr = "t",
   learner.id.chr = "l",
   learner.cl.chr = "regr.lm",
