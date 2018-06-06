@@ -41,74 +41,134 @@ source_files_recursively.fun("./R")
 source_files_recursively.fun("../agrometeor_utilities_public/R/")
 
 # Loading the data
-load(paste0(wd.chr,"/data-output/apicall.RData"))
+#load(paste0(wd.chr,"/data-output/apicall.RData"))
 
 #+ ---------------------------------
 #' ## Data acquisition
 #' 
 #+ data-acquisition, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
 
-#' ### Independent variable
-
-# Get the topo rasters stack
-topo.ras.stack <- build_topo_rasters.fun()
-
-# Create the 10km² resolution virtual stations network
-vn_10.grid.sfc <- build_wal_grid.fun(res.num=10,geom.chr = "centers")
-vn_10.grid.sf <- st_sf(geom=vn_10.grid.sfc)
-
-# Create the 1km² resolution virtual stations network
-vn_1.grid.sfc <- build_wal_grid.fun(res.num=1,geom.chr = "centers")
-vn_1.grid.sf <- st_sf(geom=vn_1.grid.sfc)
-
-# "Core" the topo rasters stack at the locations of the 10 km² virtual stations
-topo.num <- raster::extract(topo.ras.stack, vn_10.grid.sf, weights=FALSE, fun=max)
-vn_10_data.grid.sf <- st_sf(altitude=topo.num[,1], slo=topo.num[,2], asp=topo.num[,3], geom=vn_10.grid.sfc)
-
-# "Core" the topo rasters stack at the locations of the 1 km² virtual stations
-topo.num <- raster::extract(topo.ras.stack, vn_1.grid.sf, weights=FALSE, fun=max)
-vn_1_data.grid.sf <- st_sf(altitude=topo.num[,1], slo=topo.num[,2], asp=topo.num[,3], geom=vn_1.grid.sfc)
-
-# Reconsrtruct a normal 10 km² df to submit as prediction grid to mlr library
-vn_10_data.grid.sf <- vn_10_data.grid.sf %>% filter(!is.na(altitude)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
-coor.vn_10_data.grid.df <- data.frame(st_coordinates(x = vn_10_data.grid.sf))
-topo.vn_10_data.grid.df <- (as.data.frame(vn_10_data.grid.sf))[-length(vn_10_data.grid.sf)]
-vn_10_data.grid.df <- dplyr::bind_cols(coor.vn_10_data.grid.df, topo.vn_10_data.grid.df)
-
-# Reconsrtruct a normal 1 km² df to submit as prediction grid to mlr library
-vn_1_data.grid.sf <- vn_1_data.grid.sf %>% filter(!is.na(altitude)) %>% filter(!is.na(slo)) %>% filter(!is.na(asp))
-coor.vn_1_data.grid.df <- data.frame(st_coordinates(x = vn_1_data.grid.sf))
-topo.vn_1_data.grid.df <- (as.data.frame(vn_1_data.grid.sf))[-length(vn_1_data.grid.sf)]
-vn_1_data.grid.df <- dplyr::bind_cols(coor.vn_1_data.grid.df, topo.vn_1_data.grid.df)
-colnames(vn_1_data.grid.df)[1:3] <- c("longitude", "latitude", "altitude")
-
 #' ### Dependent variables
-tsa_last_year.df <- prepare_agromet_API_data.fun(
+
+# Retrieving from API
+tsa_5days.records.df <- prepare_agromet_API_data.fun(
   get_from_agromet_API.fun(
     user_token.chr = Sys.getenv("AGROMET_API_V1_KEY"),
     table_name.chr = "cleandata",
     stations_ids.chr = "all",
     sensors.chr = "tsa",
     dfrom.chr = as.character(Sys.Date()-60),
-    dto.chr = as.character(Sys.Date()-55)
+    dto.chr = as.character(Sys.Date()-55),
+    api_v.chr = "v2"
   )
 )
 
 # Filtering records to keep only the useful ones
-tsa_last_year.df <- tsa_last_year.df %>%
+tsa_5days.records.df <- tsa_5days.records.df %>%
   filter(network_name == "pameseb") %>%
   filter(type_name != "Sencrop") %>%
   filter(!is.na(to)) %>%
   filter(state == "Ok") %>%
   filter(!is.na(tsa))
 
+# Selecting only the useful features
+tsa_5days.records.df <- tsa_5days.records.df %>%
+  dplyr::select(one_of(c("mtime", "longitude", "latitude", "altitude", "tsa")))
+
+#' ### Independent variables
+
+# get the interpolation grid
+grid.sp <- build_wal_grid.sp.fun(1000)
+
+# core the topo rasters stack at the positions of the grid
+topo.df <- data.frame(
+  raster::extract(
+    projectRaster(
+      build_topo_rasters.fun(),
+      crs=crs(grid)),
+    grid,
+    weights=TRUE,
+    fun=max
+    ))
+
+# group the topo info with the lon and lat info
+explanatory.df <- bind_cols(data.frame(grid.sp), topo.df)
+colnames(explanatory.df) <- c("longitude", "latitude", "altitude", "pente", "orientation")
+
+#+ ---------------------------------
+#' ## Sptial prediction for one hour
+#' 
+#+ one_h_spatial_pred, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
+
+# predicting one hour
+spatialized.df <- tsa_5days.records.df %>%
+  filter(mtime == tsa_5days.records.df$mtime[13] ) %>%
+  spatialize(
+    records.df  = .,
+    task.id.chr = "t",
+    learner.id.chr = "l",
+    learner.cl.chr = "regr.lm",
+    target.chr = "tsa",
+    prediction_grid.df = explanatory.df
+  )
+
+# making it a spatial object 
+# https://www.rdocumentation.org/packages/sp/versions/1.2-7/topics/SpatialGridDataFrame-class
+#https://stackoverflow.com/questions/29736577/how-to-convert-data-frame-to-spatial-coordinates#29736844
+gridded <- spatialized.df
+coordinates(gridded) <- c("longitude", "latitude")
+crs(gridded) <- crs(wallonie.sp)
+
+gridded.3812.sp <- spTransform(gridded, CRS(projargs = dplyr::filter(rgdal::make_EPSG(), code == "3812")$prj4))
+gridded.3812.sp  <- as(gridded.3812.sp , "SpatialPixelsDataFrame")
+gridded.3812.sp <- as(gridded.3812.sp, "SpatialGridDataFrame")
+
+#+ ---------------------------------
+#' ## mapping the predicted grid using tmap
+#' 
+#+ mapping, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
+
+library(tmap)
+tm_shape(gridded.3812.sp, projection="3812") +
+  tm_raster("response",  
+            palette = "OrRd",
+            title="Temperature",
+            auto.palette.mapping=FALSE,
+            breaks = seq(min(gridded.3812.sp@data$response, na.rm = TRUE),
+                         max(gridded.3812.sp@data$response, na.rm = TRUE),
+                         length = 11)) +
+  tm_layout(legend.position = c(0.01,0.2),
+            legend.text.size = 0.7) +
+  tm_compass(position = c(0.2,0.2), color.light = "grey20") +
+  tm_scale_bar(breaks = NULL, width = NA, size = 0.8, text.color = "grey20",
+               color.dark = "grey20", color.light = "white", lwd = 1, position = c(0.2,0.01),
+               just = NA) +
+  tm_shape(wallonie.3812.sp) +
+  tm_borders("grey20", lwd = 1.5) +
+  tm_credits("© CRA-W", position = c(.85, 0))
+
+
+#+ ---------------------------------
+#' ## Wrangling data to make it mlr compliant
+#' 
+#+ data-acquisition, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
+
+# Building a nested data frame, where for each hourly observation we have a 30 stations dataset of 1h temperature record.
+library(purrr)
+tsa_5days.nested.df <- tsa_5days.records.df %>%
+  group_by(mtime) %>%
+  nest()
+
+# Passing to benchmarking function
+tsa_5days.bmr.l <- benchmark.hourly_sets(tsa_5days.nested.df)
+
 # selecting features useful for modelization
-tsa.model.df <- tsa_last_year.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
+tsa.model.df <- tsa_5days.records.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
 
 # converting to sf
 tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
-                        coords = c("longitude", "latitude"),
-                        crs = 4326)
+                             coords = c("longitude", "latitude"),
+                             crs = 4326)
 
 #+ ---------------------------------
 #' ## Spatialization
@@ -130,9 +190,11 @@ make_sf <- function(row){
 #https://stackoverflow.com/questions/49724457/how-to-pass-second-parameter-to-function-while-using-the-map-function-of-purrr-p
 #https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r
 
-#One model for each hour
 
-mod.by_mtime <- tsa_last_year.df %>%
+
+
+#One model for each hour
+mod.by_mtime <- tsa_5days.records.df %>%
   group_by(mtime) %>%
   by_row(spatialize(
     records.df  = .,
@@ -142,13 +204,16 @@ mod.by_mtime <- tsa_last_year.df %>%
     target.chr = "tsa",
     prediction_grid.df = vn_1_data.grid.df
   ))
- 
- mod.by_mtime.sf <-mod.by_mtime %>%
+
+
+
+
+mod.by_mtime.sf <-mod.by_mtime %>%
   do(make_sf(
     row =.
   ))
 
-bmr.by_mtime <- tsa_last_year.df %>%
+bmr.by_mtime <- tsa_5days.records.df %>%
   group_by(mtime) %>%
   do(lrns.benchmark(
     records.df = .,
@@ -159,14 +224,14 @@ bmr.by_mtime <- tsa_last_year.df %>%
 
 # 
 se <- spatialize(
-    records.df = tsa_last_year.df,
-    task.id.chr = "t",
-    learner.id.chr = "l",
-    learner.cl.chr = "regr.lm",
-    target.chr = "tsa",
-    prediction_grid.df = vn_1_data.grid.df
-  )
-  
+  records.df = tsa_5days.records.df,
+  task.id.chr = "t",
+  learner.id.chr = "l",
+  learner.cl.chr = "regr.lm",
+  target.chr = "tsa",
+  prediction_grid.df = vn_1_data.grid.df
+)
+
 
 
 # http://stat545.com/block023_dplyr-do.html

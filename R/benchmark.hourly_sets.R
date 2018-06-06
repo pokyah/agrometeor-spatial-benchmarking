@@ -20,19 +20,52 @@
 #'---
 
 
-lrnrs.benchmark <- function(records.df, target.chr, prediction_grid.df, ){
+benchmark.hourly_sets <- function(nested.records.df, target.chr){
   
   require(mlr)
   
+  # defining the target var
+  target.chr = "tsa"
   
-  meuse.df <- as.data.frame(meuse)
-  meuse.df<- na.omit(meuse.df)
-  meuse.df <- meuse.df %>% dplyr::select(one_of("zinc", "x", "y"))
-  meuse.grid.df <- as.data.frame(meuse.grid)[c("x","y")]
+  # defining the validation (resampling) strategy
+  resampling.l = mlr::makeResampleDesc(
+    method = "LOO"#,
+    #predict = "test"
+  )
+  
+  # defining the list of learners to benchmark
+  learners.l <- list("regr.lm", "regr.elmNN", "regr.kknn", "regr.km")
+  
+  # converting each tibble of the nested records to a strict dataframe
+  # ::todo:: need to use transmute_at
+  nested.records.df <- nested.records.df %>%
+    mutate(data_as_df = purrr::map(
+      .x = data,
+      .f = data.frame
+      ))
+  
+  # defining the regression tasks for eache of the hourly datasets
+  nested.records.df <- nested.records.df %>%
+    mutate(task = purrr::map(
+      .x = data_as_df,
+      .f = mlr::makeRegrTask,
+      id = "test",
+      target = target.chr))
+  
+  # keeping only the useful features (vars)
+  u.nested.records.df <- nested.records.df %>%
+    mutate(data_u = purrr::map(
+      .x = data,
+      .f = dplyr::select_(
+        one_of(c("longitude", "latitude", "altitude", "tsa"))
+        )
+      ))
+  
+  # defining the list of tasks from the nested records
+  tasks.l <- nested.records.df$data_as_df
   
   
   
-  # learners <- list("regr.lm", "regr.elmNN", "regr.kknn", "regr.km")
   # map(learners, makeLearner)
   
   # making short the df is not a tible but a strict df
@@ -54,11 +87,7 @@ lrnrs.benchmark <- function(records.df, target.chr, prediction_grid.df, ){
     coordinates = meuse.df[c("x", "y")]
   )
   
-  # defining the validation strategy
-  valid.l = mlr::makeResampleDesc(
-    method = "LOO",
-    predict = "test"
-  )
+
   
   # conducting the benchmark experiment
   benchmark.l <- benchmark(learners = lrns.l, tasks = spatialization.task, resamplings = valid.l)
@@ -77,6 +106,8 @@ lrnrs.benchmark <- function(records.df, target.chr, prediction_grid.df, ){
   class(meuse.grid.pred.data)
   
   spplot(meuse.grid.pred.data)
+  
+  
   
   spplot(meuse$zinc)
   

@@ -4,6 +4,13 @@ mod.by_mtime.nested <- tsa_last_year.df %>%
   group_by(mtime) %>%
   nest()
 
+
+
+
+
+
+
+
 # mod.by_mtime.nested[[1, "data"]]
 # 
 # spatialized.df <- spatialize(
