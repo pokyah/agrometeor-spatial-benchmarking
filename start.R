@@ -170,78 +170,128 @@ tsa.nested.df <- tsa.records.df %>%
   group_by(mtime) %>%
   nest()
 
-# Passing to benchmarking function
+# converting each tibble of the nested records to a strict dataframe (required by mlr)
+# ::todo:: need to use transmute_at
+tsa.nested.df <- tsa.nested.df %>%
+  mutate(data_as_df = purrr::map(
+    .x = data,
+    .f = data.frame
+  ))
+
+# Now we can make a benchmark experiment as described in mlr package.
 tsa.bmr.l <- benchmark.hourly_sets(tsa.nested.df)
 
-# selecting features useful for modelization
-tsa.model.df <- tsa.records.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
+# defining the regression tasks for each of the hourly datasets
+# https://stackoverflow.com/questions/46868706/failed-to-use-map2-with-mutate-with-purrr-and-dplyr
+#https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function?rq=1
+tsa.nested.df <- tsa.nested.df %>%
+  mutate(task = purrr::map2(
+    as.character(mtime),
+    data_as_df,
+    mlr::makeRegrTask,
+    target = "tsa"
+  )
+  )
 
-# converting to sf
-tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
-                             coords = c("longitude", "latitude"),
-                             crs = 4326)
+# defining the response learner by getting one defined in the bmr expe
+resp.regr.lrn = class(getBMRLearners(tsa.bmr.l))[[1]] #extracting the first learner of the bmr experiment
 
-#+ ---------------------------------
-#' ## Spatialization
+# defining the standard error learner by altering the previous one.
+# We need it to make a map that combines prediction with uncertainty
+se.regr.lrn = setPredictType(resp.regr.lrn, "se")
+
+
+
+# defining the models for each of the hourly da1tasets
+tsa.nested.df <- tsa.nested.df %>%
+  mutate(model = purrr::map2(
+    task,
+    train,
+    mlr::makeRegrTask,
+    target = target.chr
+  )
+  )
+
+
+
+
+# Now we need to make prediction for new data (i.e. our spatial grid).
+# Ideally, prediction should be made using the best method thanks to results of bencmark experiment,
+# but for now, we can predict (spatialize for all of them just to test the code)
+# https://mlr-org.github.io/mlr/reference/predict.WrappedModel.html
+# We need to call predict on our wrapped models. Let's extarct them :
+# https://mlr-org.github.io/mlr/articles/tutorial/devel/benchmark_experiments.html
+fitted_models.l  <- getBMRModels(tsa.bmr.l)
+
+#' # selecting features useful for modelization
+#' tsa.model.df <- tsa.records.df %>% select(one_of(c("longitude", "latitude", "altitude", "tsa")))
 #' 
-#+ spatialization, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
-
-make_sf <- function(row){
-  st_as_sf(
-    x = row, 
-    coords = c("longitude", "latitude"),
-    crs = 4326)
-}
-
-#https://stackoverflow.com/questions/35558766/purrr-map-a-t-test-onto-a-split-df
-#http://stat545.com/block024_group-nest-split-map.html
-#https://purrr.tidyverse.org/reference/map.html
-#https://stackoverflow.com/questions/47415072/pass-multiple-functions-to-purrrmap
-#https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function#42518473
-#https://stackoverflow.com/questions/49724457/how-to-pass-second-parameter-to-function-while-using-the-map-function-of-purrr-p
-#https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r
-
-
-
-
-#One model for each hour
-mod.by_mtime <- tsa.records.df %>%
-  group_by(mtime) %>%
-  by_row(spatialize(
-    records.df  = .,
-    task.id.chr = "t",
-    learner.id.chr = "l",
-    learner.cl.chr = "regr.lm",
-    target.chr = "tsa",
-    prediction_grid.df = vn_1_data.grid.df
-  ))
-
-
-
-
-mod.by_mtime.sf <-mod.by_mtime %>%
-  do(make_sf(
-    row =.
-  ))
-
-bmr.by_mtime <- tsa.records.df %>%
-  group_by(mtime) %>%
-  do(lrns.benchmark(
-    records.df = .,
-    task.id.chr = "t",
-    target.chr = "tsa",
-    prediction_grid.df = vn_1_data.grid.df
-  ))
-
-# 
-se <- spatialize(
-  records.df = tsa.records.df,
-  task.id.chr = "t",
-  learner.id.chr = "l",
-  learner.cl.chr = "regr.lm",
-  target.chr = "tsa",
-  prediction_grid.df = vn_1_data.grid.df
-)
+#' # converting to sf
+#' tsa.model.sf <- sf::st_as_sf(x = tsa.model.df, 
+#'                              coords = c("longitude", "latitude"),
+#'                              crs = 4326)
+#' 
+#' #+ ---------------------------------
+#' #' ## Spatialization
+#' #' 
+#' #+ spatialization, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE, results='asis'
+#' 
+#' make_sf <- function(row){
+#'   st_as_sf(
+#'     x = row, 
+#'     coords = c("longitude", "latitude"),
+#'     crs = 4326)
+#' }
+#' 
+#' #https://stackoverflow.com/questions/35558766/purrr-map-a-t-test-onto-a-split-df
+#' #http://stat545.com/block024_group-nest-split-map.html
+#' #https://purrr.tidyverse.org/reference/map.html
+#' #https://stackoverflow.com/questions/47415072/pass-multiple-functions-to-purrrmap
+#' #https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function#42518473
+#' #https://stackoverflow.com/questions/49724457/how-to-pass-second-parameter-to-function-while-using-the-map-function-of-purrr-p
+#' #https://gis.stackexchange.com/questions/222978/lon-lat-to-simple-features-sfg-and-sfc-in-r
+#' 
+#' 
+#' 
+#' 
+#' #One model for each hour
+#' mod.by_mtime <- tsa.records.df %>%
+#'   group_by(mtime) %>%
+#'   by_row(spatialize(
+#'     records.df  = .,
+#'     task.id.chr = "t",
+#'     learner.id.chr = "l",
+#'     learner.cl.chr = "regr.lm",
+#'     target.chr = "tsa",
+#'     prediction_grid.df = vn_1_data.grid.df
+#'   ))
+#' 
+#' 
+#' 
+#' 
+#' mod.by_mtime.sf <-mod.by_mtime %>%
+#'   do(make_sf(
+#'     row =.
+#'   ))
+#' 
+#' bmr.by_mtime <- tsa.records.df %>%
+#'   group_by(mtime) %>%
+#'   do(lrns.benchmark(
+#'     records.df = .,
+#'     task.id.chr = "t",
+#'     target.chr = "tsa",
+#'     prediction_grid.df = vn_1_data.grid.df
+#'   ))
+#' 
+#' # 
+#' se <- spatialize(
+#'   records.df = tsa.records.df,
+#'   task.id.chr = "t",
+#'   learner.id.chr = "l",
+#'   learner.cl.chr = "regr.lm",
+#'   target.chr = "tsa",
+#'   prediction_grid.df = vn_1_data.grid.df
+#' )
 
 
 
