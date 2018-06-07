@@ -181,11 +181,23 @@ tsa.nested.df <- tsa.nested.df %>%
 # Now we can make a benchmark experiment as described in mlr package.
 tsa.bmr.l <- benchmark.hourly_sets(tsa.nested.df)
 
-# defining the regression tasks for each of the hourly datasets
+# defining the regression tasks on the stations observations for each of the hourly datasets
 # https://stackoverflow.com/questions/46868706/failed-to-use-map2-with-mutate-with-purrr-and-dplyr
 #https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function?rq=1
 tsa.nested.df <- tsa.nested.df %>%
-  mutate(task = purrr::map2(
+  mutate(stations_task = purrr::map2(
+    as.character(mtime),
+    data_as_df,
+    mlr::makeRegrTask,
+    target = "tsa"
+  )
+  )
+
+# defining the regression prediction tasks on the interpolation grid for each of the hourly datasets
+# https://stackoverflow.com/questions/46868706/failed-to-use-map2-with-mutate-with-purrr-and-dplyr
+#https://stackoverflow.com/questions/42518156/use-purrrmap-to-apply-multiple-arguments-to-a-function?rq=1
+tsa.nested.df <- tsa.nested.df %>%
+  mutate(grid_task = purrr::map2(
     as.character(mtime),
     data_as_df,
     mlr::makeRegrTask,
@@ -199,8 +211,6 @@ resp.regr.lrn = class(getBMRLearners(tsa.bmr.l))[[1]] #extracting the first lear
 # defining the standard error learner by altering the previous one.
 # We need it to make a map that combines prediction with uncertainty
 se.regr.lrn = setPredictType(resp.regr.lrn, "se")
-
-
 
 # defining the models for each of the hourly da1tasets
 tsa.nested.df <- tsa.nested.df %>%
