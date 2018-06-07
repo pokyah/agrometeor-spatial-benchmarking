@@ -179,6 +179,9 @@ tsa.nested.df <- tsa.nested.df %>%
   ))
 
 # Now we can make a benchmark experiment as described in mlr package.
+# This will allow us to choose the best learner for a specific task.
+# Later, we will need to also define the best task among many tasks (tasks differ by the features that are incorporated)
+# we also have the option to use an automatic feature selector by fusing it to the learner (see mlr doc)
 tsa.bmr.l <- benchmark.hourly_sets(tsa.nested.df)
 
 # defining the regression tasks on the stations observations for each of the hourly datasets
@@ -205,14 +208,14 @@ tsa.nested.df <- tsa.nested.df %>%
   )
   )
 
-# defining the response learner by getting one defined in the bmr expe
+# extracting one of the learner from the bmr expe
 resp.regr.lrn = class(getBMRLearners(tsa.bmr.l))[[1]] #extracting the first learner of the bmr experiment
 
 # defining the standard error learner by altering the previous one.
 # We need it to make a map that combines prediction with uncertainty
 se.regr.lrn = setPredictType(resp.regr.lrn, "se")
 
-# defining the models for each of the hourly da1tasets
+# defining the models for each of the hourly datasets
 tsa.nested.df <- tsa.nested.df %>%
   mutate(model = purrr::map2(
     task,
